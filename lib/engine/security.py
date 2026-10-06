@@ -1,4 +1,5 @@
 import re
+import shutil
 
 SAFE_BINS = {
     "ip", "ls", "cat", "cd", "pwd", "uname", "whoami", "df", "du",
@@ -7,6 +8,16 @@ SAFE_BINS = {
     "find", "locate", "xargs", "rg", "fd", "getent", "host",
     "searchsploit", "semgrep", "pip-audit"
 }
+
+def binary_exists(cmd: str) -> bool:
+    clean = cmd.strip()
+    if not clean:
+        return False
+    parts = clean.split()
+    first = parts[0]
+    if first == "sudo" and len(parts) > 1:
+        first = parts[1]
+    return shutil.which(first) is not None
 
 def is_safe_command(cmd: str) -> bool:
     if "sudo" in cmd.split():

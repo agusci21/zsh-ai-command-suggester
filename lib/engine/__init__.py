@@ -3,7 +3,7 @@ import subprocess
 import re
 import tempfile
 from .skills import load_skills
-from .security import is_safe_command, sanitize_command
+from .security import is_safe_command, sanitize_command, binary_exists
 from .client import query_ollama
 from .validator import validate_proposal
 
@@ -21,7 +21,7 @@ def run():
     tools = sys.argv[11].strip()
     skills_dir = sys.argv[12] if len(sys.argv) > 12 else ""
 
-    skills_context = load_skills(skills_dir, user_query, verbose)
+    skills_context = load_skills(skills_dir, user_query, verbose, iterative, host, model)
 
     if chat_mode:
         system_prompt = (
@@ -37,7 +37,7 @@ def run():
         )
     else:
         system_prompt = (
-            f"You are a Linux CLI assistant on {os_info} running Zsh.\n"
+            f"You are a Linux CLI generator on {os_info} running Zsh.\n"
             "Host Environment:\n"
             f"Working Directory: {workdir}\n"
             f"Available Search/CLI Tools: {tools}\n"
@@ -49,16 +49,16 @@ def run():
             "- NEVER wrap commands in quotes, code fences (```), or assignments.\n"
             "- NEVER include explanations, comments, or conversational text.\n"
             "- NEVER output an isolated binary name without required flags or parameters.\n"
-            "- Ensure all quotation marks and parentheses are properly closed.\n"
-            "- Prefer faster tools if present in Available Search/CLI Tools (e.g. rg over grep, fd over find)."
+            "- Follow strictly the flags and syntax documented in ACTIVE SPECIALIZED DOMAIN SKILLS.\n"
+            "- Use ONLY real network interfaces from the Host Environment or inspection output.\n"
+            "- Ensure all quotation marks and parentheses are properly closed."
         )
         if iterative:
             system_prompt += (
                 "\n\nCRITICAL ITERATIVE POLICY:\n"
-                "- When an active Skill specifies an Inspection Strategy for a query, you MUST start your response with 'EXEC: <command>' to execute that strategy.\n"
-                "- For network or host targets with specific hostnames, ALWAYS resolve the hostname to IP first with 'EXEC:'.\n"
-                "- Ensure inspection commands have fully balanced quotes.\n"
-                "- DO NOT output the final command until you have received and analyzed the output from EXEC."
+                "- If the active skill requires environment data, run inspection with 'EXEC: <cmd>'.\n"
+                "- Never guess interfaces; extract them from the Host Environment or run an inspection.\n"
+                "- DO NOT output the final command until inspection is complete."
             )
 
     messages = [
@@ -100,42 +100,46 @@ def run():
         if selected.startswith("EXEC:") and (iterative or chat_mode):
             raw_inspect = selected.replace("EXEC:", "").strip().splitlines()[0]
             inspect_cmd = sanitize_command(raw_inspect)
-            is_safe = is_safe_command(inspect_cmd)
 
-            if is_safe:
+            if not binary_exists(inspect_cmd):
+                output = f"Error: Command '{inspect_cmd.split()[0]}' not found. Use available tools or inspect provided Network Interfaces."
                 if verbose:
-                    sys.stderr.write(f"\033[1;34m[ask:inspect]\033[0m Automated: \033[1;32m{inspect_cmd}\033[0m\n")
-                    sys.stderr.flush()
-                proc = subprocess.run(inspect_cmd, shell=True, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                output = proc.stdout[:3000]
-                if verbose and output.strip():
-                    sys.stderr.write(f"\033[1;30m{output.strip()}\033[0m\n")
+                    sys.stderr.write(f"\033[1;31m[ask:inspect error]\033[0m {output}\n")
                     sys.stderr.flush()
             else:
-                sys.stderr.write(f"\n\033[1;34m[ask]\033[0m Privilege authorization required: \033[1;33m{inspect_cmd}\033[0m\n")
-                sys.stderr.write("\033[1;31m[ask] Authorize execution? (y/N): \033[0m")
-                sys.stderr.flush()
-
-                with open("/dev/tty", "r") as tty_in:
-                    ans = tty_in.readline().strip().lower()
-
-                if ans in ["y", "s"]:
+                is_safe = is_safe_command(inspect_cmd)
+                if is_safe:
                     if verbose:
-                        sys.stderr.write(f"\033[1;34m[ask:inspect]\033[0m Executing privileged: {inspect_cmd}\n")
+                        sys.stderr.write(f"\033[1;34m[ask:inspect]\033[0m Automated: \033[1;32m{inspect_cmd}\033[0m\n")
                         sys.stderr.flush()
-                    with tempfile.NamedTemporaryFile(mode="w+", delete=True) as tmp_out:
-                        wrapped_cmd = f"({inspect_cmd}) > >(tee {tmp_out.name}) 2>&1"
-                        subprocess.run(wrapped_cmd, shell=True, cwd=workdir, executable="/bin/bash")
-                        tmp_out.seek(0)
-                        output = tmp_out.read()[:3000]
+                    proc = subprocess.run(inspect_cmd, shell=True, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    output = proc.stdout[:3000]
+                    if verbose and output.strip():
+                        sys.stderr.write(f"\033[1;30m{output.strip()}\033[0m\n")
+                        sys.stderr.flush()
                 else:
-                    output = "Command rejected by user."
+                    sys.stderr.write(f"\n\033[1;34m[ask]\033[0m Privilege authorization required: \033[1;33m{inspect_cmd}\033[0m\n")
+                    sys.stderr.write("\033[1;31m[ask] Authorize execution? (y/N): \033[0m")
+                    sys.stderr.flush()
+
+                    with open("/dev/tty", "r") as tty_in:
+                        ans = tty_in.readline().strip().lower()
+
+                    if ans in ["y", "s"]:
+                        if verbose:
+                            sys.stderr.write(f"\033[1;34m[ask:inspect]\033[0m Executing privileged: {inspect_cmd}\n")
+                            sys.stderr.flush()
+                        with tempfile.NamedTemporaryFile(mode="w+", delete=True) as tmp_out:
+                            wrapped_cmd = f"({inspect_cmd}) > >(tee {tmp_out.name}) 2>&1"
+                            subprocess.run(wrapped_cmd, shell=True, cwd=workdir, executable="/bin/bash")
+                            tmp_out.seek(0)
+                            output = tmp_out.read()[:3000]
+                    else:
+                        output = "Command rejected by user."
 
             messages.append({"role": "assistant", "content": f"EXEC: {inspect_cmd}"})
             prompt_suffix = (
-                "Provide your comprehensive answer to the original question based on this data. No EXEC."
-                if chat_mode
-                else "Provide strictly the final single-line command now based on this inspection data. Ensure all quotes are balanced. Follow active skills rules. No EXEC, no explanation."
+                "Provide strictly the final single-line command now using discovered real parameters. No EXEC, no explanation."
             )
             messages.append({"role": "user", "content": f"Inspection output:\n{output.strip()}\n{prompt_suffix}"})
             continue
@@ -150,7 +154,7 @@ def run():
             final_result = candidate_cmd
             break
 
-        is_valid, feedback = validate_proposal(host, model, user_query, candidate_cmd)
+        is_valid, feedback = validate_proposal(host, model, user_query, candidate_cmd, interfaces, skills_context)
 
         if verbose:
             sys.stderr.write(f"\033[1;34m[ask:critic]\033[0m Candidate: '\033[1;33m{candidate_cmd}\033[0m' | Valid: {is_valid}\n")
@@ -165,7 +169,7 @@ def run():
             messages.append({"role": "assistant", "content": candidate_cmd})
             messages.append({
                 "role": "user",
-                "content": f"The proposed command is insufficient: {feedback}. Output strictly the corrected raw command now. No explanations."
+                "content": f"The proposed command is invalid: {feedback}. Output strictly the corrected raw command respecting the skill flags and real environment."
             })
 
     print(final_result)

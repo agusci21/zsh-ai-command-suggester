@@ -24,7 +24,10 @@ _ask_is_safe_command() {
         fi
         ;;
       docker)
-        if ! echo "$segment" | grep -qE "(ps|images|stats|inspect)"; then
+        if echo "$segment" | grep -qE "(rm|rmi|kill|stop|prune|exec)"; then
+          return 1
+        fi
+        if ! echo "$segment" | grep -qE "(ps|images|stats|inspect|container (ls|list|ps)|volume (ls|list)|network (ls|list))"; then
           return 1
         fi
         ;;
@@ -37,4 +40,15 @@ _ask_is_safe_command() {
   done
 
   return 0
+}
+
+_ask_requires_elevation() {
+  local cmd="$1"
+  if echo "$cmd" | grep -qw "sudo"; then
+    return 0
+  fi
+  if echo "$cmd" | grep -qE "(>|>>|rm |dd |chmod |chown |mkfs|reboot|shutdown|systemctl (restart|stop|disable|mask)|docker (rm|rmi|kill|stop|prune))"; then
+    return 0
+  fi
+  return 1
 }

@@ -155,6 +155,12 @@ def balance_quotes(cmd):
         cmd += '"'
     return cmd
 
+def sanitize_command(raw_cmd):
+    cleaned = raw_cmd.strip()
+    if (cleaned.startswith("'") and cleaned.endswith("'")) or (cleaned.startswith('"') and cleaned.endswith('"')):
+        cleaned = cleaned[1:-1].strip()
+    return balance_quotes(cleaned)
+
 skills_context = load_skills(skills_dir, user_query, verbose)
 
 if chat_mode:
@@ -189,7 +195,8 @@ else:
         system_prompt += (
             "\n\nCRITICAL ITERATIVE POLICY:\n"
             "- When an active Skill specifies an Inspection Strategy for a query, you MUST start your response with 'EXEC: <command>' to execute that strategy.\n"
-            "- For Git commit requests, you MUST execute 'EXEC: git status -s' first.\n"
+            "- For network or host targets with specific hostnames, ALWAYS resolve the hostname to IP first with 'EXEC:'.\n"
+            "- Ensure inspection commands have fully balanced quotes.\n"
             "- DO NOT output the final command until you have received and analyzed the output from EXEC."
         )
 
@@ -252,7 +259,8 @@ while step < max_steps:
         selected = content
 
     if selected.startswith("EXEC:") and (iterative or chat_mode):
-        inspect_cmd = selected.replace("EXEC:", "").strip().splitlines()[0].strip("'\"`")
+        raw_inspect = selected.replace("EXEC:", "").strip().splitlines()[0]
+        inspect_cmd = sanitize_command(raw_inspect)
         is_safe = is_safe_command(inspect_cmd)
 
         if is_safe:
@@ -286,11 +294,11 @@ while step < max_steps:
         prompt_suffix = (
             "Provide your comprehensive answer to the original question based on this data. No EXEC."
             if chat_mode
-            else "Provide strictly the final single-line command now. If unstaged/untracked files exist, use: 'git add . && git commit -m \"...\"'. Never output only 'git add'. Follow Conventional Commits format. No EXEC, no explanation."
+            else "Provide strictly the final single-line command now using the discovered IP address. Ensure all quotes are balanced. Follow active skills rules. No EXEC, no explanation."
         )
-        messages.append({"role": "user", "content": f"Inspection output:\n{output}\n{prompt_suffix}"})
+        messages.append({"role": "user", "content": f"Inspection output:\n{output.strip()}\n{prompt_suffix}"})
     else:
-        final_result = balance_quotes(selected) if not chat_mode else selected
+        final_result = sanitize_command(selected) if not chat_mode else selected
         break
 
 print(final_result)

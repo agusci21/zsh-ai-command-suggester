@@ -19,7 +19,7 @@ _ask_is_safe_command() {
     part=$(echo "$segment" | awk '{print $1}')
     case "$part" in
       git)
-        if echo "$segment" | grep -qE "(push|commit|reset|clean|checkout|rebase|merge)"; then
+        if ! echo "$segment" | grep -qE "^git\s+(status|diff|log|branch|show|rev-parse|check-ignore|describe)(\s+|$)"; then
           return 1
         fi
         ;;
@@ -44,11 +44,18 @@ _ask_is_safe_command() {
 
 _ask_requires_elevation() {
   local cmd="$1"
+
   if echo "$cmd" | grep -qw "sudo"; then
     return 0
   fi
-  if echo "$cmd" | grep -qE "(>|>>|rm |dd |chmod |chown |mkfs|reboot|shutdown|systemctl (restart|stop|disable|mask)|docker (rm|rmi|kill|stop|prune))"; then
+
+  if echo "$cmd" | grep -qE "(rm\s+-|dd\s+|mkfs|reboot|shutdown|systemctl (restart|stop|disable|mask)|docker (rm|rmi|kill|stop|prune))"; then
     return 0
   fi
+
+  if echo "$cmd" | grep -qE "(^|\s|&&|\|\|)git\s+(commit|push|add|rm|merge|rebase|tag|cherry-pick|reset|clean|checkout)(\s+|$)"; then
+    return 0
+  fi
+
   return 1
 }

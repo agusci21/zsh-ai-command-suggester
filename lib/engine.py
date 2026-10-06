@@ -38,8 +38,7 @@ def is_safe_command(cmd):
             continue
         first = parts[0]
         if first == "git":
-            destructive = ["push", "commit", "reset", "clean", "checkout", "rebase", "merge"]
-            if any(d in parts for d in destructive):
+            if len(parts) < 2 or parts[1] not in ["status", "diff", "log", "branch", "show", "rev-parse", "check-ignore", "describe"]:
                 return False
             continue
         if first == "docker":
@@ -60,11 +59,24 @@ def balance_quotes(cmd):
         cmd += '"'
     return cmd
 
+domain_rules = """
+DOMAIN SPECIFIC INSTRUCTIONS:
+- Git Operations:
+  * To inspect local repository changes, ALWAYS start with: 'EXEC: git status -s'
+  * If files are unstaged (indicated by ' M', '??', ' D' in git status), the final command MUST stage them first before committing (e.g., 'git add <files> && git commit -m "..."' or 'git add . && git commit -m "..."').
+  * Commit messages MUST strictly follow Conventional Commits (feat:, fix:, refactor:, chore:, docs:) using English in imperative mood describing the exact modifications.
+- Networking & IP Discovery:
+  * Never hardcode subnets/IPs if unspecified; use 'EXEC: ip -br addr' or 'EXEC: ip route' to discover actual network bounds.
+- System Services:
+  * Distinguish read-only inspection (systemctl status <svc>) from management actions (systemctl restart <svc>).
+"""
+
 if chat_mode:
     system_prompt = (
         f"You are a helpful software engineering assistant on {os_info}.\n"
         f"Working Directory: {workdir}\n"
         f"Available Tools: {tools}\n\n"
+        f"{domain_rules}\n"
         "Guidelines:\n"
         "- Answer the user query clearly, concisely, and directly.\n"
         "- Respond in Spanish if the user asks in Spanish, otherwise English.\n"
@@ -79,6 +91,7 @@ else:
         f"Available Search/CLI Tools: {tools}\n"
         f"Network Interfaces:\n{interfaces}\n"
         f"Default Route:\n{route}\n\n"
+        f"{domain_rules}\n"
         "CRITICAL RULES:\n"
         "- Output strictly and ONLY the raw executable shell command.\n"
         "- NEVER wrap commands in quotes, code fences (```), or assignments (response=...).\n"
@@ -89,9 +102,9 @@ else:
     if iterative:
         system_prompt += (
             "\n\nCRITICAL ITERATION POLICY:\n"
-            "- NEVER emit 'EXEC: ' for the requested action itself (e.g., restart, stop, start, kill, rm, mkdir).\n"
-            "- Use 'EXEC: ' ONLY for read-only environment inspections when you lack critical parameters (e.g., discovering the local subnet with 'ip -br addr' or finding a dynamic PID/port with 'ss').\n"
-            "- If the request does not require discovering missing information, output the final command immediately without 'EXEC:'."
+            "- NEVER emit 'EXEC: ' for the requested final action itself (e.g., commit, push, restart, stop, rm, mkdir).\n"
+            "- Use 'EXEC: ' ONLY for read-only inspections to gather missing parameters or context (e.g., 'git status -s', 'ip -br addr').\n"
+            "- Once the inspection output is provided, produce strictly the final command without 'EXEC:'."
         )
 
 messages = [
@@ -184,7 +197,7 @@ while step < max_steps:
                 output = "Command rejected by user."
 
         messages.append({"role": "assistant", "content": f"EXEC: {inspect_cmd}"})
-        prompt_suffix = "Provide your comprehensive answer to the original question based on this data. No EXEC." if chat_mode else "Provide the final single-line command now. Ensure all quotes are balanced. No EXEC, no explanation."
+        prompt_suffix = "Provide your comprehensive answer to the original question based on this data. No EXEC." if chat_mode else "Provide the final single-line command now. If files need staging, include 'git add'. Ensure all quotes are balanced. No EXEC, no explanation."
         messages.append({"role": "user", "content": f"Inspection output:\n{output}\n{prompt_suffix}"})
     else:
         final_result = balance_quotes(selected) if not chat_mode else selected

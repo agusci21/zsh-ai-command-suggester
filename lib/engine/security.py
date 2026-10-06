@@ -6,7 +6,7 @@ SAFE_BINS = {
     "free", "uptime", "ps", "env", "head", "tail", "grep", "awk",
     "sed", "which", "whereis", "file", "stat", "hostname", "nmcli",
     "find", "locate", "xargs", "rg", "fd", "getent", "host",
-    "searchsploit", "semgrep", "pip-audit"
+    "searchsploit", "semgrep", "pip-audit", "date", "printf", "echo"
 }
 
 def binary_exists(cmd: str) -> bool:
@@ -52,17 +52,17 @@ def is_safe_command(cmd: str) -> bool:
 
     return True
 
-def balance_quotes(cmd: str) -> str:
-    s_quote = cmd.count("'") % 2 != 0
-    d_quote = cmd.count('"') % 2 != 0
-    if s_quote:
-        cmd += "'"
-    if d_quote:
-        cmd += '"'
-    return cmd
-
 def sanitize_command(raw_cmd: str) -> str:
     cleaned = raw_cmd.strip()
-    if (cleaned.startswith("'") and cleaned.endswith("'")) or (cleaned.startswith('"') and cleaned.endswith('"')):
-        cleaned = cleaned[1:-1].strip()
-    return balance_quotes(cleaned)
+    
+    # Strip markdown backticks if wrapped
+    if cleaned.startswith("`") and cleaned.endswith("`"):
+        cleaned = cleaned.strip("`").strip()
+    
+    # Strip surrounding whole-line quotes only if they wrap the entire command erroneously
+    if len(cleaned) >= 2:
+        if (cleaned.startswith('"') and cleaned.endswith('"') and cleaned.count('"') == 2) or \
+           (cleaned.startswith("'") and cleaned.endswith("'") and cleaned.count("'") == 2):
+            cleaned = cleaned[1:-1].strip()
+
+    return cleaned

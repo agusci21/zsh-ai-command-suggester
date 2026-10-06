@@ -1,1 +1,0 @@
-Soy un asistente de línea de comandos basado en Zsh para Debian GNU/Linux 13 (trixie).

@@ -7,6 +7,48 @@ from .security import is_safe_command, sanitize_command, binary_exists
 from .client import query_ollama
 from .validator import validate_proposal
 
+def clean_reasoning_tokens(content: str) -> str:
+    cleaned = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+    if "<think>" in cleaned and "</think>" not in cleaned:
+        cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+def extract_command_from_text(content: str) -> str:
+    cleaned_content = clean_reasoning_tokens(content)
+
+    fence_matches = re.findall(r"```(?:sh|bash|zsh)?\s*(.*?)\s*```", cleaned_content, re.DOTALL)
+    if fence_matches:
+        candidate = fence_matches[-1].strip()
+        lines = [l.strip() for l in candidate.splitlines() if l.strip() and not l.strip().startswith(("#", "//"))]
+        if lines:
+            return "\n".join(lines)
+
+    lines = [l.strip() for l in cleaned_content.splitlines() if l.strip()]
+    
+    thought_starters = (
+        "okay", "let's", "let me", "first", "next", "to achieve", "we can",
+        "in linux", "the user", "para ", "this ", "you ", "here ", "el ",
+        "puedes ", "usa ", "nota:", "sure", "claro", "so the command", "i'll"
+    )
+
+    valid_candidates = []
+    for line in lines:
+        if line.startswith("EXEC:"):
+            return line
+        sub = re.sub(r"^(?:response\s*=\s*['\"]?|cmd\s*=\s*['\"]?)", "", line).rstrip("'\"")
+        lower_sub = sub.lower()
+        if not any(lower_sub.startswith(prefix) for prefix in thought_starters):
+            valid_candidates.append(sub)
+
+    if valid_candidates:
+        return valid_candidates[-1]
+
+    for line in reversed(lines):
+        if any(bin_name in line for bin_name in ["date", "printf", "echo", "bettercap", "nmap", "ip", "awk", "sed", "rg"]):
+            return line
+
+    return lines[0] if lines else ""
+
 def run():
     host = sys.argv[1]
     model = sys.argv[2]
@@ -37,28 +79,21 @@ def run():
         )
     else:
         system_prompt = (
-            f"You are a Linux CLI generator on {os_info} running Zsh.\n"
-            "Host Environment:\n"
+            f"You are a raw shell command generator for Linux {os_info} running Zsh.\n"
             f"Working Directory: {workdir}\n"
             f"Available Search/CLI Tools: {tools}\n"
             f"Network Interfaces:\n{interfaces}\n"
-            f"Default Route:\n{route}\n"
             f"{skills_context}\n\n"
-            "CRITICAL RULES:\n"
-            "- Output strictly and ONLY the raw executable shell command.\n"
-            "- NEVER wrap commands in quotes, code fences (```), or assignments.\n"
-            "- NEVER include explanations, comments, or conversational text.\n"
-            "- NEVER output an isolated binary name without required flags or parameters.\n"
-            "- Follow strictly the flags and syntax documented in ACTIVE SPECIALIZED DOMAIN SKILLS.\n"
-            "- Use ONLY real network interfaces from the Host Environment or inspection output.\n"
-            "- Ensure all quotation marks and parentheses are properly closed."
+            "CRITICAL: Do NOT explain, do NOT analyze, do NOT output your thoughts.\n"
+            "Respond ONLY with a markdown block containing the raw executable Zsh command:\n"
+            "```zsh\n"
+            "<command>\n"
+            "```"
         )
         if iterative:
             system_prompt += (
-                "\n\nCRITICAL ITERATIVE POLICY:\n"
-                "- If the active skill requires environment data, run inspection with 'EXEC: <cmd>'.\n"
-                "- Never guess interfaces; extract them from the Host Environment or run an inspection.\n"
-                "- DO NOT output the final command until inspection is complete."
+                "\n\nIf environment inspection is needed, output ONLY:\n"
+                "EXEC: <command>"
             )
 
     messages = [
@@ -75,25 +110,7 @@ def run():
         content = query_ollama(host, model, messages, chat_mode=chat_mode)
 
         if not chat_mode:
-            fence = re.search(r"```(?:sh|bash|zsh)?\s*(.*?)\s*```", content, re.DOTALL)
-            if fence:
-                content = fence.group(1).strip()
-
-            lines = [l.strip() for l in content.splitlines() if l.strip()]
-            selected = ""
-            for l in lines:
-                if l.startswith("EXEC:"):
-                    selected = l
-                    break
-                cleaned = re.sub(r"^(?:response\s*=\s*['\"]?|cmd\s*=\s*['\"]?)", "", l).rstrip("'\"")
-                if not cleaned.startswith(("#", "//", "Para ", "This ", "You ")):
-                    selected = cleaned
-                    break
-
-            if not selected and lines:
-                selected = lines[0]
-
-            selected = re.sub(r"^(?:response\s*=\s*['\"]?|cmd\s*=\s*['\"]?)", "", selected).strip()
+            selected = extract_command_from_text(content)
         else:
             selected = content
 
@@ -102,7 +119,7 @@ def run():
             inspect_cmd = sanitize_command(raw_inspect)
 
             if not binary_exists(inspect_cmd):
-                output = f"Error: Command '{inspect_cmd.split()[0]}' not found. Use available tools or inspect provided Network Interfaces."
+                output = f"Error: Command '{inspect_cmd.split()[0]}' not found in PATH."
                 if verbose:
                     sys.stderr.write(f"\033[1;31m[ask:inspect error]\033[0m {output}\n")
                     sys.stderr.flush()
@@ -139,7 +156,7 @@ def run():
 
             messages.append({"role": "assistant", "content": f"EXEC: {inspect_cmd}"})
             prompt_suffix = (
-                "Provide strictly the final single-line command now using discovered real parameters. No EXEC, no explanation."
+                "Provide strictly the final single-line command in a ```zsh block now. No EXEC, no explanation."
             )
             messages.append({"role": "user", "content": f"Inspection output:\n{output.strip()}\n{prompt_suffix}"})
             continue
@@ -169,7 +186,7 @@ def run():
             messages.append({"role": "assistant", "content": candidate_cmd})
             messages.append({
                 "role": "user",
-                "content": f"The proposed command is invalid: {feedback}. Output strictly the corrected raw command respecting the skill flags and real environment."
+                "content": f"The proposed command is invalid: {feedback}. Output strictly the corrected command in a ```zsh code block."
             })
 
     print(final_result)

@@ -13,7 +13,7 @@ def clean_reasoning_tokens(content: str) -> str:
         cleaned = re.sub(r"<think>.*", "", cleaned, flags=re.DOTALL)
     return cleaned.strip()
 
-def extract_command_from_text(content: str) -> str:
+def extract_command_from_text(content: str, allow_exec: bool) -> str:
     cleaned_content = clean_reasoning_tokens(content)
 
     fence_matches = re.findall(r"```(?:sh|bash|zsh)?\s*(.*?)\s*```", cleaned_content, re.DOTALL)
@@ -21,10 +21,13 @@ def extract_command_from_text(content: str) -> str:
         candidate = fence_matches[-1].strip()
         lines = [l.strip() for l in candidate.splitlines() if l.strip() and not l.strip().startswith(("#", "//"))]
         if lines:
-            return "\n".join(lines)
+            line = lines[0]
+            if not allow_exec and line.startswith("EXEC:"):
+                line = line.replace("EXEC:", "").strip()
+            return line
 
     lines = [l.strip() for l in cleaned_content.splitlines() if l.strip()]
-    
+
     thought_starters = (
         "okay", "let's", "let me", "first", "next", "to achieve", "we can",
         "in linux", "the user", "para ", "this ", "you ", "here ", "el ",
@@ -34,20 +37,21 @@ def extract_command_from_text(content: str) -> str:
     valid_candidates = []
     for line in lines:
         if line.startswith("EXEC:"):
-            return line
+            return line if allow_exec else line.replace("EXEC:", "").strip()
         sub = re.sub(r"^(?:response\s*=\s*['\"]?|cmd\s*=\s*['\"]?)", "", line).rstrip("'\"")
         lower_sub = sub.lower()
         if not any(lower_sub.startswith(prefix) for prefix in thought_starters):
             valid_candidates.append(sub)
 
     if valid_candidates:
-        return valid_candidates[-1]
+        res = valid_candidates[-1]
+        return res if (allow_exec or not res.startswith("EXEC:")) else res.replace("EXEC:", "").strip()
 
-    for line in reversed(lines):
-        if any(bin_name in line for bin_name in ["date", "printf", "echo", "bettercap", "nmap", "ip", "awk", "sed", "rg"]):
-            return line
+    if lines:
+        res = lines[0]
+        return res if (allow_exec or not res.startswith("EXEC:")) else res.replace("EXEC:", "").strip()
 
-    return lines[0] if lines else ""
+    return ""
 
 def run():
     host = sys.argv[1]
@@ -84,17 +88,20 @@ def run():
             f"Available Search/CLI Tools: {tools}\n"
             f"Network Interfaces:\n{interfaces}\n"
             f"{skills_context}\n\n"
-            "CRITICAL: Do NOT explain, do NOT analyze, do NOT output your thoughts.\n"
-            "Respond ONLY with a markdown block containing the raw executable Zsh command:\n"
+            "CRITICAL:\n"
+            "- Do NOT explain, do NOT analyze, do NOT output your thoughts.\n"
+            "- Respond ONLY with a markdown block containing the raw executable Zsh command:\n"
             "```zsh\n"
             "<command>\n"
             "```"
         )
         if iterative:
             system_prompt += (
-                "\n\nIf environment inspection is needed, output ONLY:\n"
+                "\n\nIf environment inspection is strictly needed, output ONLY:\n"
                 "EXEC: <command>"
             )
+        else:
+            system_prompt += "\n- NEVER output 'EXEC:'. Return directly the final command."
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -110,7 +117,7 @@ def run():
         content = query_ollama(host, model, messages, chat_mode=chat_mode)
 
         if not chat_mode:
-            selected = extract_command_from_text(content)
+            selected = extract_command_from_text(content, allow_exec=iterative)
         else:
             selected = content
 

@@ -5,6 +5,7 @@ import subprocess
 import re
 import os
 import tempfile
+import glob
 
 host = sys.argv[1]
 model = sys.argv[2]
@@ -17,6 +18,25 @@ interfaces = sys.argv[8]
 route = sys.argv[9]
 workdir = sys.argv[10]
 tools = sys.argv[11].strip()
+skills_dir = sys.argv[12] if len(sys.argv) > 12 else ""
+
+def load_skills(directory):
+    if not directory or not os.path.isdir(directory):
+        return ""
+    loaded = []
+    pattern = os.path.join(directory, "**", "*.md")
+    for file_path in sorted(glob.glob(pattern, recursive=True)):
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+                if content:
+                    skill_name = os.path.basename(os.path.dirname(file_path))
+                    loaded.append(f"### SKILL: {skill_name}\n{content}")
+        except Exception:
+            continue
+    if loaded:
+        return "\n\nACTIVE SPECIALIZED DOMAIN SKILLS:\n" + "\n\n".join(loaded)
+    return ""
 
 def is_safe_command(cmd):
     if "sudo" in cmd.split():
@@ -42,7 +62,7 @@ def is_safe_command(cmd):
                 return False
             continue
         if first == "docker":
-            if len(parts) > 1 and parts[1] in ["ps", "images", "stats", "inspect"]:
+            if len(parts) > 1 and parts[1] in ["ps", "images", "stats", "inspect", "container", "volume", "network"]:
                 continue
             return False
         if first not in safe_bins:
@@ -59,24 +79,14 @@ def balance_quotes(cmd):
         cmd += '"'
     return cmd
 
-domain_rules = """
-DOMAIN SPECIFIC INSTRUCTIONS:
-- Git Operations:
-  * To inspect local repository changes, ALWAYS start with: 'EXEC: git status -s'
-  * If files are unstaged (indicated by ' M', '??', ' D' in git status), the final command MUST stage them first before committing (e.g., 'git add <files> && git commit -m "..."' or 'git add . && git commit -m "..."').
-  * Commit messages MUST strictly follow Conventional Commits (feat:, fix:, refactor:, chore:, docs:) using English in imperative mood describing the exact modifications.
-- Networking & IP Discovery:
-  * Never hardcode subnets/IPs if unspecified; use 'EXEC: ip -br addr' or 'EXEC: ip route' to discover actual network bounds.
-- System Services:
-  * Distinguish read-only inspection (systemctl status <svc>) from management actions (systemctl restart <svc>).
-"""
+skills_context = load_skills(skills_dir)
 
 if chat_mode:
     system_prompt = (
         f"You are a helpful software engineering assistant on {os_info}.\n"
         f"Working Directory: {workdir}\n"
-        f"Available Tools: {tools}\n\n"
-        f"{domain_rules}\n"
+        f"Available Tools: {tools}\n"
+        f"{skills_context}\n\n"
         "Guidelines:\n"
         "- Answer the user query clearly, concisely, and directly.\n"
         "- Respond in Spanish if the user asks in Spanish, otherwise English.\n"
@@ -90,8 +100,8 @@ else:
         f"Working Directory: {workdir}\n"
         f"Available Search/CLI Tools: {tools}\n"
         f"Network Interfaces:\n{interfaces}\n"
-        f"Default Route:\n{route}\n\n"
-        f"{domain_rules}\n"
+        f"Default Route:\n{route}\n"
+        f"{skills_context}\n\n"
         "CRITICAL RULES:\n"
         "- Output strictly and ONLY the raw executable shell command.\n"
         "- NEVER wrap commands in quotes, code fences (```), or assignments (response=...).\n"
@@ -101,10 +111,10 @@ else:
     )
     if iterative:
         system_prompt += (
-            "\n\nCRITICAL ITERATION POLICY:\n"
-            "- NEVER emit 'EXEC: ' for the requested final action itself (e.g., commit, push, restart, stop, rm, mkdir).\n"
-            "- Use 'EXEC: ' ONLY for read-only inspections to gather missing parameters or context (e.g., 'git status -s', 'ip -br addr').\n"
-            "- Once the inspection output is provided, produce strictly the final command without 'EXEC:'."
+            "\n\nCRITICAL ITERATIVE POLICY:\n"
+            "- When an active Skill specifies an Inspection Strategy for a query, you MUST start your response with 'EXEC: <command>' to execute that strategy.\n"
+            "- For Git commit or inspection requests, you MUST execute 'EXEC: git status -s' first.\n"
+            "- DO NOT output the final command until you have received and analyzed the output from EXEC."
         )
 
 messages = [
@@ -123,7 +133,7 @@ while step < max_steps:
         "messages": messages,
         "stream": False,
         "options": {
-            "temperature": 0.2 if chat_mode else 0.0,
+            "temperature": 0.0,
             "num_predict": 1024 if chat_mode else 512
         }
     }).encode("utf-8")
@@ -197,7 +207,7 @@ while step < max_steps:
                 output = "Command rejected by user."
 
         messages.append({"role": "assistant", "content": f"EXEC: {inspect_cmd}"})
-        prompt_suffix = "Provide your comprehensive answer to the original question based on this data. No EXEC." if chat_mode else "Provide the final single-line command now. If files need staging, include 'git add'. Ensure all quotes are balanced. No EXEC, no explanation."
+        prompt_suffix = "Provide your comprehensive answer to the original question based on this data. No EXEC." if chat_mode else "Provide the complete final command now (e.g. stage unstaged files and commit). Follow the active Skill rules strictly. Ensure all quotes are balanced. No EXEC, no explanation."
         messages.append({"role": "user", "content": f"Inspection output:\n{output}\n{prompt_suffix}"})
     else:
         final_result = balance_quotes(selected) if not chat_mode else selected

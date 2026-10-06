@@ -22,6 +22,18 @@ _ask_query() {
   sys_route=$(ip route 2>/dev/null | grep default)
   local current_dir="$PWD"
 
+  local plugin_root="${ZSH_AI_SUGGESTER_DIR}"
+  if [ -z "$plugin_root" ] || [ ! -d "$plugin_root" ]; then
+    local script_source="${(%):-%x}"
+    plugin_root="${script_source:A:h:h}"
+  fi
+  if [ ! -f "${plugin_root}/lib/engine.py" ]; then
+    plugin_root="$HOME/programas/practicas/zsh-ai-comand-suggester"
+  fi
+
+  local skills_dir="${plugin_root}/skills"
+  local engine_path="${plugin_root}/lib/engine.py"
+
   local installed_tools=""
   local t
   for t in rg find fd locate grep awk sed git docker nmap curl wget; do
@@ -29,11 +41,6 @@ _ask_query() {
       installed_tools="${installed_tools}${t} "
     fi
   done
-
-  local engine_path="${0:A:h}/engine.py"
-  if [ ! -f "$engine_path" ]; then
-    engine_path="${ZSH_AI_SUGGESTER_DIR:-$HOME/programas/practicas/zsh-ai-comand-suggester}/lib/engine.py"
-  fi
 
   python3 "$engine_path" \
     "$host" \
@@ -46,5 +53,6 @@ _ask_query() {
     "$sys_interfaces" \
     "$sys_route" \
     "$current_dir" \
-    "$installed_tools"
+    "$installed_tools" \
+    "$skills_dir"
 }

@@ -9,8 +9,7 @@ _ask_is_safe_command() {
     return 1
   fi
 
-  local safe_bins="ip|ls|cat|cd|pwd|uname|whoami|df|du|free|uptime|ps|env|head|tail|grep|awk|sed|which|whereis|file|stat|hostname|nmcli|systemctl|find|locate|xargs|rg|fd"
-
+local safe_bins="ip|ls|cat|cd|pwd|uname|whoami|df|du|free|uptime|ps|env|head|tail|grep|awk|sed|which|whereis|file|stat|hostname|nmcli|systemctl|find|locate|xargs|rg|fd|searchsploit"
   local segments
   segments=("${(@s/|/)full_cmd}")
 

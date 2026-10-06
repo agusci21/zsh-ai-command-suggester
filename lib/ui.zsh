@@ -23,9 +23,11 @@ ask-widget() {
         local opt="${query%% *}"
         query="${query#* }"
         local flags="${opt#-}"
-        local j
-        for (( j=0; j<${#flags}; j++ )); do
-          case "${flags:$j:1}" in
+        local idx=0
+        local char=""
+        while [ $idx -lt ${#flags} ]; do
+          char="${flags:$idx:1}"
+          case "$char" in
             i) iterative="true" ;;
             v) verbose="true" ;;
             c) chat="true" ;;
@@ -37,6 +39,7 @@ ask-widget() {
               return
               ;;
           esac
+          (( idx++ ))
         done
         ;;
       --iterative\ *|--iterativo\ *)
@@ -153,9 +156,11 @@ function ask {
         ;;
       -[a-zA-Z]*)
         local flags="${1#-}"
-        local j
-        for (( j=0; j<${#flags}; j++ )); do
-          case "${flags:$j:1}" in
+        local idx=0
+        local char=""
+        while [ $idx -lt ${#flags} ]; do
+          char="${flags:$idx:1}"
+          case "$char" in
             i) iterative="true" ;;
             v) verbose="true" ;;
             c) chat="true" ;;
@@ -165,11 +170,12 @@ function ask {
               return 0
               ;;
             *)
-              echo "Unknown option: -${flags:$j:1}" >&2
+              echo "Unknown option: -${char}" >&2
               _ask_manual
               return 1
               ;;
           esac
+          (( idx++ ))
         done
         shift
         ;;

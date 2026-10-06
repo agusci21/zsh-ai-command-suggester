@@ -20,26 +20,102 @@ workdir = sys.argv[10]
 tools = sys.argv[11].strip()
 skills_dir = sys.argv[12] if len(sys.argv) > 12 else ""
 
-def load_skills(directory):
+def extract_trigger_keywords(content, skill_name):
+    keywords = set()
+    keywords.add(skill_name.lower())
+    
+    triggers_match = re.search(r"##\s+Triggers\s*\n(.*?)(?=\n##|\Z)", content, re.DOTALL | re.IGNORECASE)
+    if triggers_match:
+        trigger_text = triggers_match.group(1).lower()
+        cleaned = re.sub(r"[^\w\s-]", " ", trigger_text)
+        stopwords = {
+            "queries", "involving", "about", "the", "and", "for",
+            "with", "from", "into", "that", "this", "when", "using", "such"
+        }
+        for token in cleaned.split():
+            if len(token) > 1 and token not in stopwords:
+                keywords.add(token)
+                if token.endswith("s"):
+                    keywords.add(token[:-1])
+    return keywords
+
+def is_skill_triggered(user_text, content, skill_name):
+    keywords = extract_trigger_keywords(content, skill_name)
+    normalized_query = re.findall(r"[\w-]+", user_text.lower())
+    query_set = set(normalized_query)
+    
+    for word in list(query_set):
+        if word.endswith("s") and len(word) > 2:
+            query_set.add(word[:-1])
+        if word.endswith("es") and len(word) > 3:
+            query_set.add(word[:-2])
+
+    synonyms = {
+        "commit": ["git", "commits"],
+        "commitear": ["git", "commit"],
+        "cambio": ["git", "diff", "status", "commit"],
+        "cambios": ["git", "diff", "status", "commit"],
+        "rama": ["branch", "git"],
+        "ramas": ["branch", "git"],
+        "repo": ["git", "repository"],
+        "repositorio": ["git", "repository"],
+        "red": ["network", "interfaces", "subnets", "ip"],
+        "puerto": ["ports", "port", "ss"],
+        "puertos": ["ports", "port", "ss"],
+        "contenedor": ["container", "containers", "docker"],
+        "contenedores": ["container", "containers", "docker"],
+        "vulnerabilidad": ["vulnerability", "vuln", "target-audit", "network-audit"],
+        "vulnerabilidades": ["vulnerability", "vuln", "target-audit", "network-audit"],
+        "escanear": ["nmap", "scan", "scanning"],
+        "escaneo": ["nmap", "scan", "scanning"]
+    }
+
+    for word in query_set:
+        if word in keywords:
+            return True
+        if word in synonyms:
+            for syn in synonyms[word]:
+                if syn in keywords or syn == skill_name.lower():
+                    return True
+
+    return False
+
+def load_skills(directory, user_text, is_verbose):
     if not directory or not os.path.isdir(directory):
         return ""
     loaded = []
+    loaded_names = []
     pattern = os.path.join(directory, "**", "*.md")
+    
     for file_path in sorted(glob.glob(pattern, recursive=True)):
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read().strip()
-                if content:
-                    skill_name = os.path.basename(os.path.dirname(file_path))
+                if not content:
+                    continue
+                skill_name = os.path.basename(os.path.dirname(file_path))
+                if is_skill_triggered(user_text, content, skill_name):
                     loaded.append(f"### SKILL: {skill_name}\n{content}")
+                    loaded_names.append(skill_name)
         except Exception:
             continue
+
+    if is_verbose:
+        if loaded_names:
+            names_str = ", ".join(loaded_names)
+            sys.stderr.write(f"\033[1;34m[ask:verbose]\033[0m Loaded skills ({len(loaded_names)}): \033[1;32m{names_str}\033[0m\n")
+        else:
+            sys.stderr.write("\033[1;34m[ask:verbose]\033[0m No skills matched for this query.\n")
+        sys.stderr.flush()
+
     if loaded:
         return "\n\nACTIVE SPECIALIZED DOMAIN SKILLS:\n" + "\n\n".join(loaded)
     return ""
 
 def is_safe_command(cmd):
     if "sudo" in cmd.split():
+        return False
+    if "nmap" in cmd.split():
         return False
     if any(op in cmd for op in [">", ">>", "rm ", "dd ", "chmod ", "chown ", "mkfs", "reboot", "shutdown"]):
         return False
@@ -48,7 +124,7 @@ def is_safe_command(cmd):
         "ip", "ls", "cat", "cd", "pwd", "uname", "whoami", "df", "du",
         "free", "uptime", "ps", "env", "head", "tail", "grep", "awk",
         "sed", "which", "whereis", "file", "stat", "hostname", "nmcli",
-        "find", "locate", "xargs", "rg", "fd"
+        "find", "locate", "xargs", "rg", "fd", "getent", "host", "searchsploit"
     }
 
     pipe_segments = cmd.split("|")
@@ -79,7 +155,7 @@ def balance_quotes(cmd):
         cmd += '"'
     return cmd
 
-skills_context = load_skills(skills_dir)
+skills_context = load_skills(skills_dir, user_query, verbose)
 
 if chat_mode:
     system_prompt = (
@@ -113,7 +189,7 @@ else:
         system_prompt += (
             "\n\nCRITICAL ITERATIVE POLICY:\n"
             "- When an active Skill specifies an Inspection Strategy for a query, you MUST start your response with 'EXEC: <command>' to execute that strategy.\n"
-            "- For Git commit or inspection requests, you MUST execute 'EXEC: git status -s' first.\n"
+            "- For Git commit requests, you MUST execute 'EXEC: git status -s' first.\n"
             "- DO NOT output the final command until you have received and analyzed the output from EXEC."
         )
 
@@ -207,7 +283,11 @@ while step < max_steps:
                 output = "Command rejected by user."
 
         messages.append({"role": "assistant", "content": f"EXEC: {inspect_cmd}"})
-        prompt_suffix = "Provide your comprehensive answer to the original question based on this data. No EXEC." if chat_mode else "Provide the complete final command now (e.g. stage unstaged files and commit). Follow the active Skill rules strictly. Ensure all quotes are balanced. No EXEC, no explanation."
+        prompt_suffix = (
+            "Provide your comprehensive answer to the original question based on this data. No EXEC."
+            if chat_mode
+            else "Provide strictly the final single-line command now. If unstaged/untracked files exist, use: 'git add . && git commit -m \"...\"'. Never output only 'git add'. Follow Conventional Commits format. No EXEC, no explanation."
+        )
         messages.append({"role": "user", "content": f"Inspection output:\n{output}\n{prompt_suffix}"})
     else:
         final_result = balance_quotes(selected) if not chat_mode else selected
